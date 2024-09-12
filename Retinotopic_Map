@@ -1,0 +1,65 @@
+%Learning with a Retinotopic Map 
+
+clear variables;
+clc;
+clf;
+
+%Load data 
+load 'MNIST.mat' 
+
+%Set up task 
+field_frac = 0.25; % "fractional" width of each neuron's input field 
+n_neurons_dense = [10]; % # neurons in final layer 
+y = kim_create_mapnet([28; 36], field_frac, n_neurons_dense);
+n_m = 100; % number of examples per minibatch
+n_t = 10000; % number of test examples  
+eta = 0.001; % original adam learning rate; 0.0005 <= eta <= 0.001 also work well
+% eta = 0.002; % updated adam learning rate; learning works well for 
+% backprop_relu(y, dL_dv), but poorly for kim_backprop_relog(y, e), 
+% kim_backprop_relog(y, dL_dv)
+beta_1 = 0.9; % adam hyperparameter 
+beta_2 = 0.999; % " 
+
+for i = 1:10 % loop through each epoch 
+    shuffle = randperm(size(TRAIN_images, 1)); % shuffle data 
+    TRAIN_images = TRAIN_images(shuffle, :);
+    TRAIN_answers = TRAIN_answers(shuffle, :);
+    TRAIN_labels = TRAIN_labels(shuffle, :);
+    for j = 1:600 % loop through each minibatch 
+        start_index = (j-1)*100+1; % start index of jth minibatch 
+        end_index = j*100; % end index of jth minibatch 
+        x = TRAIN_images(start_index:end_index, :)'; % 784x100 matrix of 100 y{1}s 
+        y_star = TRAIN_labels(start_index:end_index, :)'; % 10x100 matrix of one-hot label vectors 
+        y = kim_forward_relog(y, x); % compute network's output 
+        y.y{end} = exp(y.y{end})./sum(exp(y.y{end}), 1); % apply softmax to output signal
+        e = y.y{end} - y_star; 
+        L = 0.5*sum(sum(e.*e, 1)); 
+        dL_dv = zeros(n_neurons_dense, n_m); % init. 10x100 array, storing dL_dv (transposes)  
+        for k = 1:n_m 
+        s = y.y{end}(:, k); % softmax output at y.v{end}(:, k) 
+        softmax_jacobian = zeros(n_neurons_dense); % initialise 10x10 softmax jacobian 
+        for m = 1:n_neurons_dense
+            for n = 1:n_neurons_dense
+                kronecker_delta = (m == n);
+                softmax_jacobian(m, n) = s(m)*(kronecker_delta - s(n));
+            end 
+        end 
+        dL_dv(:, k) = softmax_jacobian'*e(:, k); % dL_dv{3} = e'*dy/dv = e'*softmax_jacobian 
+        end 
+        %y = backprop_relu(y, dL_dv); % learning works best of three  
+        %y= kim_backprop_relog(y, e); % w/out softmax; learning works well with old eta 
+        y = kim_backprop_relog(y, dL_dv); % w/ softmax; learning works well with old eta 
+        y = adam(y, y.dL_dW, y.dL_db, eta, beta_1, beta_2);
+    end
+    %Run network on test set
+    x = TEST_images';
+    y_star = TEST_labels'; 
+    y = kim_forward_relog(y, x); % compute network's output 
+    y.y{end} = exp(y.y{end})./sum(exp(y.y{end}), 1); % apply softmax to output signal 
+    disp(['Epoch:', num2str(i)])
+    [~, one_indices] = max(TEST_labels'); % find index of 1s in each column 
+    [~, max_indices] = max(y.y{end}); % find index of max value in each column 
+    incorrect_indices = find(max_indices ~= one_indices); % find indices of incorrect guesses  
+    num_incorrect = numel(incorrect_indices); % count # incorrect guesses 
+    fprintf('%d incorrect matches.\n', num_incorrect);
+end 
